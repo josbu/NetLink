@@ -6,7 +6,7 @@ use anyhow::anyhow;
 
 use clap::error::ErrorKind;
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 
 use crate::config::{ConfigView, FileConfigView};
@@ -83,10 +83,10 @@ struct ArgsBack {
 enum Commands {
     /// Backend command
     Cmd {
-        /// set backend server host. default 127.0.0.1
+        /// Set backend server host. default 127.0.0.1
         #[arg(long)]
-        cmd_host: Option<String>,
-        /// When opening multiple programs, this port needs to be set. default 23336
+        cmd_host: Option<IpAddr>,
+        ///  Set backend server port. When opening multiple programs, this port needs to be set. default 23336
         #[arg(long)]
         cmd_port: Option<u16>,
         /// View information about the current program
@@ -104,7 +104,7 @@ enum Commands {
     },
 }
 
-const CMD_HOST: &str = "127.0.0.1";
+const CMD_HOST: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 const CMD_PORT: u16 = 23336;
 const LISTEN_PORT: u16 = 23333;
 
@@ -160,7 +160,7 @@ async fn client_cmd(args: ArgsBack) -> anyhow::Result<()> {
         groups,
         others,
     } = args.command;
-    let host = cmd_host.unwrap_or(CMD_HOST.to_string());
+    let host = cmd_host.unwrap_or(CMD_HOST);
     let port = cmd_port.unwrap_or(CMD_PORT);
     let addr = format!("{host}:{port}");
     if nodes {
@@ -224,31 +224,48 @@ async fn main_by_cmd(args: Args) -> anyhow::Result<()> {
         cmd_host, cmd_port, ..
     }) = command
     {
-        format!(
-            "{}:{}",
-            cmd_host.unwrap_or(CMD_HOST.to_string()),
-            cmd_port.unwrap_or(CMD_PORT)
-        )
+        let port = cmd_port.unwrap_or(CMD_PORT);
+        if port == 0 {
+            None
+        } else {
+            Some(SocketAddr::new(cmd_host.unwrap_or(CMD_HOST), port))
+        }
     } else {
-        format!("{CMD_HOST}:{CMD_PORT}")
+        Some(SocketAddr::from_str(&format!("{CMD_HOST}:{CMD_PORT}")).unwrap())
     };
     start_by_config(config_view, addr).await?;
     Ok(())
 }
 
 async fn main_by_config_file(file_config: FileConfigView) -> anyhow::Result<()> {
-    let addr = format!("{}:{}", file_config.cmd_host, file_config.cmd_port);
+    let addr = if file_config.cmd_port == 0 {
+        None
+    } else {
+        Some(
+            SocketAddr::from_str(&format!(
+                "{}:{}",
+                file_config.cmd_host, file_config.cmd_port
+            ))
+            .unwrap(),
+        )
+    };
     let config_view = ConfigView::from(file_config);
     start_by_config(config_view, addr).await
 }
 
-async fn start_by_config(config_view: ConfigView, cmd_server_addr: String) -> anyhow::Result<()> {
+async fn start_by_config(
+    config_view: ConfigView,
+    cmd_server_addr: Option<SocketAddr>,
+) -> anyhow::Result<()> {
     let config = config_view.into_config()?;
 
     let api_service = ApiService::new(config);
-    if let Err(e) = ipc::server_start(cmd_server_addr, api_service.clone()).await {
-        return Err(anyhow!("The backend command port has already been used. Please use '--cmd-port' to change the port, err={e}"));
+    if let Some(cmd_server_addr) = cmd_server_addr {
+        if let Err(e) = ipc::server_start(cmd_server_addr, api_service.clone()).await {
+            return Err(anyhow!("The backend command port has already been used. Please use '--cmd-port' to change the port, err={e}"));
+        }
     }
+
     let (tx, mut quit) = tokio::sync::mpsc::channel::<()>(1);
 
     ctrlc2::set_async_handler(async move {

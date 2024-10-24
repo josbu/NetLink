@@ -87,7 +87,7 @@ async fn nodes_by_group(
     }
 }
 
-pub async fn start(addr: String, api_service: ApiService) -> anyhow::Result<()> {
+pub async fn start(addr: SocketAddr, api_service: ApiService) -> anyhow::Result<()> {
     let state_filter = warp::any().map(move || api_service.clone());
     let application_info_api = warp::path!("api" / "application-info")
         .and_then(application_info)
@@ -152,7 +152,6 @@ pub async fn start(addr: String, api_service: ApiService) -> anyhow::Result<()> 
                 .allow_headers(vec!["content-type"])
                 .allow_methods(vec!["GET", "POST"]),
         );
-    let addr: SocketAddr = addr.parse()?;
     let (_addr, server) = warp::serve(routes).try_bind_ephemeral(addr)?;
     log::info!("start backend command server http://{addr}");
     tokio::spawn(server);
@@ -161,6 +160,7 @@ pub async fn start(addr: String, api_service: ApiService) -> anyhow::Result<()> 
 
 #[derive(rust_embed::Embed)]
 #[folder = "static/"]
+#[exclude = "README.md"]
 struct StaticAssets;
 
 async fn serve_static(path: warp::path::Tail) -> Result<impl warp::Reply, warp::Rejection> {
